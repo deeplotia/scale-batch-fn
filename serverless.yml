@@ -1,0 +1,95 @@
+service: scale-batch-fn
+
+provider:
+  name: aws
+  region: eu-west-1
+  runtime: java8
+  lambdaHashingVersion: 20201221
+  environment:
+    BATCH_LOG_GROUP: ${env:BATCH_LOG_GROUP}
+    DYNAMODB_TABLE: batch-jobs-table
+    JOB_QUEUE: ${env:JOB_QUEUE}
+    JOB_DEFINITION: ${env:JOB_DEFINITION}
+    COMPUTE_ENVIRONMENT: ${env:COMPUTE_ENVIRONMENT}
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - batch:DescribeJobs
+        - batch:ListJobs
+        - batch:SubmitJob
+        - batch:UpdateComputeEnvironment
+      Resource:
+        - "arn:aws:batch:${opt:region, self:provider.region}:*:job-definition/${self:provider.environment.JOB_DEFINITION}"
+        - "arn:aws:batch:${opt:region, self:provider.region}:*:job-queue/${self:provider.environment.JOB_QUEUE}"
+        - "arn:aws:batch:${opt:region, self:provider.region}:*:compute-environment/${self:provider.environment.COMPUTE_ENVIRONMENT}"
+    - Effect: Allow
+      Action:
+        - batch:DescribeComputeEnvironments
+      Resource:
+        - "*"
+    - Effect: Allow
+      Action:
+        - logs:GetLogEvents
+      Resource: "arn:aws:logs:${opt:region, self:provider.region}:*:log-group:${self:provider.environment.BATCH_LOG_GROUP}:*"
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:provider.environment.DYNAMODB_TABLE}*"
+
+functions:
+  scale-batch-fn:
+    handler: com.serverless.ScaleBatchHandler
+    authorizer: aws_iam
+    environment:
+      DYNAMODB_TABLE: ${self:provider.environment.DYNAMODB_TABLE}
+      COMPUTE_ENVIRONMENT: ${self:provider.environment.COMPUTE_ENVIRONMENT}
+      STATE_INDEX: JobStateIndex
+    events:
+      - schedule: cron(* * ? * * *)
+      - cloudwatchEvent:
+          event:
+            source:
+              - 'aws.batch'
+            detail-type:
+              - 'Batch Job State Change'
+
+resources:
+  Resources:
+    BatchJobTable:
+      Type: 'AWS::DynamoDB::Table'
+      Properties:
+        BillingMode: 'PAY_PER_REQUEST'
+        AttributeDefinitions:
+          -
+            AttributeName: JobId
+            AttributeType: S
+          -
+            AttributeName: JobState
+            AttributeType: S
+        KeySchema:
+          -
+            AttributeName: JobId
+            KeyType: HASH
+        ProvisionedThroughput:
+          ReadCapacityUnits: '0'
+          WriteCapacityUnits: '0'
+        StreamSpecification:
+          StreamViewType: NEW_IMAGE
+        GlobalSecondaryIndexes:
+          -
+            IndexName: JobStateIndex
+            KeySchema:
+              -
+                AttributeName: JobState
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+            ProvisionedThroughput:
+              ReadCapacityUnits: '0'
+              WriteCapacityUnits: '0'
+        TableName: ${self:provider.environment.DYNAMODB_TABLE}
